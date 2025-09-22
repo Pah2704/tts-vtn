@@ -1,0 +1,11 @@
+# node
+node_modules
+frontend/dist
+
+# python
+.venv
+__pycache__
+*.pyc
+
+# outputs
+backend/outputs

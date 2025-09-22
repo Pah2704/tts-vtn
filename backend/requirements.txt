@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydub
+pyloudnorm
+librosa
+numpy
+soundfile
+celery
+redis
+python-multipart
+pydantic-settings

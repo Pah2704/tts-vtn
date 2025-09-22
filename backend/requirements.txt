@@ -9,3 +9,6 @@ celery
 redis
 python-multipart
 pydantic-settings
+piper
+pytest
+httpx

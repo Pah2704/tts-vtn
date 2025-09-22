@@ -15,19 +15,29 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'pnpm'
 
       - name: Enable corepack (pnpm)
         run: |
           corepack enable
           corepack prepare pnpm@9.0.0 --activate
+          pnpm -v
+
+      - name: Resolve pnpm store path
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
 
       - name: Install deps
         run: pnpm -C frontend install --frozen-lockfile
 
       - name: Build
         env:
-          # cho build dev-local; nếu có API public thì set VITE_API_BASE tương ứng
           VITE_API_BASE: http://localhost:8000/api
         run: pnpm -C frontend build
 

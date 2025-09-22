@@ -17,13 +17,13 @@ jobs:
           node-version: 20
           cache: 'pnpm'
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+      - name: Enable corepack (pnpm)
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.0.0 --activate
 
       - name: Install deps
-        run: pnpm -C frontend install
+        run: pnpm -C frontend install --frozen-lockfile
 
       - name: Build
         env:

@@ -6,6 +6,7 @@ import type {
   DownloadResultFn,
   ExportFormat,
   GenerateResponse,
+  SyncGenerateResponse,
 } from "../types/api";
 
 // Fallback thông minh: nếu không set ENV thì dùng host hiện tại + :8000
@@ -52,6 +53,11 @@ export const getStatus: GetStatusFn = async (jobId, signal) => {
   const res = await fetch(`${API_BASE}/status/${encodeURIComponent(jobId)}`, { signal });
   return handleJson(res);
 };
+
+export async function getResult(jobId: string, signal?: AbortSignal): Promise<SyncGenerateResponse> {
+  const res = await fetch(`${API_BASE}/result/${encodeURIComponent(jobId)}`, { signal });
+  return handleJson<SyncGenerateResponse>(res);
+}
 
 export const downloadResult: DownloadResultFn = async (jobId, format: ExportFormat = "wav", signal) => {
   const res = await fetch(`${API_BASE}/result/${encodeURIComponent(jobId)}?format=${format}`, { signal });

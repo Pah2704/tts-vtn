@@ -20,6 +20,14 @@ class QualityMetrics(BaseModel):
     lufsIntegrated: float
     truePeakDb: float
     durationSec: float
+    # Phase 2 (optional)
+    rms: Optional[float] = None
+    crestFactor: Optional[float] = None
+    snrApprox: Optional[float] = None
+    clippingCount: Optional[int] = None
+    silenceGapsMs: Optional[List[int]] = None
+    qualityScore: Optional[int] = None
+    warnings: Optional[List[str]] = None
 
 class ExportOptions(BaseModel):
     format: ExportFormat
@@ -67,6 +75,11 @@ class JobStatusResponse(BaseModel):
     error: Optional[ErrorInfo] = None
     result: Optional[SyncGenerateResponse] = None
 
+class PresetInfo(BaseModel):
+    key: PresetKey
+    title: str
+    lufsTarget: float
+    description: Optional[str] = None
 # ==== Router & Services ====
 api_router = APIRouter(tags=["tts"])
 
@@ -76,6 +89,8 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 from ..modules.tts_manager import TTSManager, SynthesisConfig as EngineCfg
 from ..modules.audio_pipeline import run_pipeline
 from ..modules.quality_control import MetricsDict
+from backend.modules.presets import PRESETS
+
 
 @api_router.post("/generate", response_model=GenerateResponse)
 async def generate(req: GenerateRequest) -> GenerateResponse:
@@ -93,7 +108,10 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
     raw_wav = tts.synthesize(text, EngineCfg(voice_id=req.config.voiceId, speed=speed, emotions=req.config.emotions))
 
     # 2) Pipeline -> WAV processed + metrics
-    processed_wav, metrics = run_pipeline(raw_wav)  # metrics: MetricsDict
+    processed_wav, metrics = run_pipeline(
+        raw_wav,
+        preset_key=req.config.presetKey,   # ← nhận từ FE
+    )  
     m: MetricsDict = metrics
 
     # 3) Export
@@ -105,9 +123,9 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
     job_id = uuid.uuid4().hex
     out_path = OUTPUT_DIR / f"{job_id}.{fmt}"
     if fmt == "wav":
-        audio.export(out_path, format="wav")
+        audio.export(str(out_path), format="wav")                # ✅ Path → str
     elif fmt in ("mp3", "flac", "m4a"):
-        audio.export(out_path, format=fmt, bitrate=bitrate)
+        audio.export(str(out_path), format=fmt, bitrate=bitrate) # ✅ Path → str
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported format: {fmt}")
 
@@ -121,3 +139,13 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
 @api_router.get("/status/{job_id}", response_model=JobStatusResponse)
 async def get_status(job_id: str) -> JobStatusResponse:
     raise HTTPException(status_code=501, detail=f"Not implemented: /status/{job_id}")
+
+
+@api_router.get("/presets", response_model=List[PresetInfo])
+def list_presets():
+    return [{
+        "key": p["key"],
+        "title": p["title"],
+        "lufsTarget": p["dsp"]["lufs_target"],
+        "description": p.get("description","")
+    } for p in PRESETS.values()]

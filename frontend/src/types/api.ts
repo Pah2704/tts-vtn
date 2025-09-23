@@ -26,6 +26,23 @@ export interface QualityMetrics {
   readonly truePeakDb: number;
   /** Thời lượng giây của file cuối. */
   readonly durationSec: number;
+  
+// ===== Phase 2 (mở rộng in-place, giữ optional để tương thích ngược) =====
+/** Root-mean-square level (dBFS approx). */
+  readonly rms?: number;
+  /** Crest factor = peak - rms (dB). Giá trị quá thấp → nén quá mức. */
+  readonly crestFactor?: number;
+  /** Ước lượng SNR (dB) dựa trên noise floor trong đoạn lặng. */
+  readonly snrApprox?: number;
+  /** Số mẫu/điểm clipping phát hiện được. */
+  readonly clippingCount?: number;
+  /** Danh sách các khoảng lặng (ms) đáng chú ý. */
+  readonly silenceGapsMs?: ReadonlyArray<number>;
+  /** Điểm chất lượng tổng hợp (0–100) theo rule-based QC. */
+  readonly qualityScore?: number;
+  /** Cảnh báo QC (ví dụ: "Low SNR", "Detected clipping"). */
+  readonly warnings?: ReadonlyArray<string>;
+  
 }
 
 /** Tuỳ chọn export từ BE. */
@@ -85,6 +102,22 @@ export interface AsyncGenerateResponse {
 
 /** Union cho /generate (Phase 1 trả Sync). */
 export type GenerateResponse = SyncGenerateResponse | AsyncGenerateResponse;
+
+// =======================
+// Phase 2: /api/presets (type only)
+// =======================
+/** Thông tin preset để FE render dropdown/help. */
+export interface PresetInfo {
+  readonly key: PresetKey;
+  readonly title: string;
+  readonly lufsTarget: number;
+  readonly description?: string;
+}
+
+/** Gọi /api/presets (trả danh sách preset khả dụng). */
+export type GetPresetsFn = (
+  signal?: AbortSignal
+) => Promise<ReadonlyArray<PresetInfo>>;
 
 /** Trạng thái job (dùng khi ở chế độ async Phase 3+). */
 export type JobState = "queued" | "processing" | "done" | "error";

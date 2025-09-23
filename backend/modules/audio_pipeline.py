@@ -16,6 +16,8 @@ import soundfile as sf
 import pyloudnorm as pyln
 
 from .quality_control import measure_metrics, MetricsDict
+import logging, time
+logger = logging.getLogger(__name__)
 from .presets import PRESETS, PresetKey, CompParams
 
 
@@ -353,20 +355,24 @@ def run_pipeline(
     - Nếu không có preset -> fallback Phase 1 (-16 LUFS, -1 dBTP).
     - NR/EQ/Comp hiện là placeholder (bypass), sẽ hiện thực thật ở bước sau.
     """
+    t0 = time.perf_counter()
     x, sr = _read_wav_bytes(wav_bytes)
     p = _preset_to_params(preset_key)
 
     # 1) NR
+    t1 = time.perf_counter()
     x = noise_reduce(x, sr, p.nr_strength)
     # 2) EQ
+    t2 = time.perf_counter()
     x = eq_apply(x, sr, p.eq_profile)
     # 3) Comp
+    t3 = time.perf_counter()
     x = compress(x, sr, p.comp)
 
     # 4) Normalize -> 5) Limit
+    t4 = time.perf_counter()
     x = normalize_to_lufs_array(x, sr, target_lufs=p.lufs_target)
-    x = true_peak_limit_array(x, ceiling_db=p.peak_ceiling)
-
+    x = true_peak_limit_array(x, ceiling_db=p.peak_ceiling) 
     # 6) (Optional) Voice-level matching + assemble
     if utter_wavs and p.level_match_enabled:
         parts = []
@@ -378,8 +384,21 @@ def run_pipeline(
         x = normalize_to_lufs_array(x, sr, target_lufs=p.lufs_target)
         x = true_peak_limit_array(x, ceiling_db=p.peak_ceiling)
 
+    t5 = time.perf_counter()
     out_bytes = _write_wav_bytes(x.astype(np.float32, copy=False), sr)
-    metrics: MetricsDict = measure_metrics(out_bytes)  # hiện trả LUFS/TruePeak/Duration
+    metrics: MetricsDict = measure_metrics(out_bytes)
+
+    t6 = time.perf_counter()
+    logger.info(
+        "pipeline(ms): read=%.1f NR=%.1f EQ=%.1f Comp=%.1f Norm/Limit=%.1f Write/QC=%.1f total=%.1f",
+        (t1 - t0) * 1e3,
+        (t2 - t1) * 1e3,
+        (t3 - t2) * 1e3,
+        (t4 - t3) * 1e3,
+        (t5 - t4) * 1e3,
+        (t6 - t5) * 1e3,
+        (t6 - t0) * 1e3,
+    )
     return out_bytes, metrics
 
 # ===== Backward-compat wrappers (Phase 1 tests expect these) =====

@@ -1,3 +1,5 @@
+//Client.ts
+
 import type {
   GenerateFn,
   GetStatusFn,
@@ -63,4 +65,19 @@ export function toBackendUrl(pathOrUrl: string): string {
   if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
   const p = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
   return `${API_ORIGIN}${p}`;
+}
+
+// ============================
+// Phase 2: Presets (FE client)
+// ============================
+export type PresetInfo = {
+  readonly key: "podcast_standard" | "audiobook_professional" | "announcement" | "natural_minimal";
+  readonly title: string;
+  readonly lufsTarget: number;
+  readonly description?: string;
+};
+
+export async function getPresets(signal?: AbortSignal): Promise<readonly PresetInfo[]> {
+  const res = await fetch(`${API_BASE}/presets`, { signal });
+  return handleJson<readonly PresetInfo[]>(res);
 }

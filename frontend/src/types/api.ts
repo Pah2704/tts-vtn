@@ -4,6 +4,7 @@
  */
 
 import type { PlaybackRate, EmotionTag, BackgroundFx } from "./audio";
+export type { PlaybackRate, EmotionTag, BackgroundFx } from "./audio";
 
 /** Engine TTS khả dụng. Phase 1 dùng "piper"; "xtts" để dành Phase 3. */
 export type Engine = "piper" | "xtts";

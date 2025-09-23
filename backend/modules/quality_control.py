@@ -48,9 +48,15 @@ def _rms_dbfs(x: np.ndarray) -> float:
 def _crest_factor_db(peak_db: float, rms_db: float) -> float:
     return float(peak_db - rms_db)
 
-def _detect_clipping(x: np.ndarray, ceiling_db: float = -1.0) -> int:
-    ceiling_amp = 10.0 ** (ceiling_db / 20.0)
-    return int(np.count_nonzero(np.abs(x) >= ceiling_amp - 1e-6))
+def _detect_clipping(x: np.ndarray, ceiling_db: float = 0.0) -> int:
+    """
+    Đếm số mẫu chạm/ vượt ngưỡng clipping digital.
+    Mặc định đo tại 0 dBFS (không phải -1 dBFS). Tránh báo sai khi limiter đặt -1 dBTP.
+    """
+    ceiling_amp = 10.0 ** (ceiling_db / 20.0)  # 0 dBFS -> 1.0
+    eps = 1e-6
+    return int(np.count_nonzero(np.abs(x) >= ceiling_amp - eps))
+
 
 def _estimate_noise_floor_and_silences(
     x: np.ndarray,
@@ -116,26 +122,65 @@ def measure_metrics(wav_bytes: bytes) -> MetricsDict:
     crest = _crest_factor_db(peak_db, rms_db)
     noise_floor_db, silence_gaps = _estimate_noise_floor_and_silences(x, sr)
     snr_approx = float(rms_db - noise_floor_db)
-    clipping_count = _detect_clipping(x, ceiling_db=-1.0)
+    clipping_count = _detect_clipping(x)  # đo clip thật ở 0 dBFS
 
-    # Quality score (0–100), rule-based nhẹ
-    score = 100
+     # Quality score (0–100) – rule-based tinh chỉnh có độ phân giải
+    # baseline < 100 để tránh 100/100 quá dễ
+    score = 97
     warnings: List[str] = []
-    if abs(lufs - (-16.0)) > 0.8:
-        score -= 8
+
+    # 1) LUFS – snap target { -18, -16, -14 } rồi phạt mềm theo độ lệch
+    nearest_target = min([-18.0, -16.0, -14.0], key=lambda t: abs(lufs - t))
+    lufs_err = abs(lufs - nearest_target)
+    # lệch >0.1 LU bắt đầu phạt, 1.0 LU lệch phạt ~15đ (cap)
+    if lufs_err > 0.1:
+        lufs_pen = min(15.0, (lufs_err - 0.1) * (15.0 / 0.9))
+        score -= int(round(max(0.0, lufs_pen)))
+    if lufs_err > 0.8:
         warnings.append("LUFS out-of-range")
+
+    # 2) True peak – mốc -1 dBFS, càng vượt càng phạt
     if peak_db > -1.0 + 1e-3:
-        score -= 15
+        over = (peak_db + 1.0)  # >0 khi vượt
+        pk_pen = min(18.0, max(0.0, over * 20.0))  # mỗi 0.1 dB ≈ 2đ
+        score -= int(round(pk_pen))
         warnings.append("True Peak above -1 dBFS")
-    if snr_approx < 18.0:
-        score -= 10
-        warnings.append("Low SNR")
+    else:
+        # headroom bonus nhẹ cho ≤ -1.2 / -1.5 dBFS (cap tổng bonus nhỏ)
+        headroom_bonus = 0
+        if peak_db <= -1.5:
+            headroom_bonus += 2
+        elif peak_db <= -1.2:
+            headroom_bonus += 1
+        score += headroom_bonus
+
+    # 3) SNR – tốt ≥24 dB, đẹp ≥30 dB; bonus đến 2đ nếu ≥40 dB
+    if snr_approx < 30.0:
+        if snr_approx < 24.0:
+            snr_pen = min(20.0, (24.0 - snr_approx) * 0.8)
+            score -= int(round(max(0.0, snr_pen)))
+            warnings.append("Low SNR")
+        else:
+            snr_pen = (30.0 - snr_approx) * 0.3
+            score -= int(round(max(0.0, snr_pen)))
+    else:
+        # bonus nhẹ: 30→40 dB: 0→2đ
+        score += int(round(min(2.0, max(0.0, (snr_approx - 30.0) * 0.2))))
+
+    # 4) Crest factor – “đẹp” khoảng 12–18 dB; lệch khỏi 12 phạt nhẹ
+    #   (giữ cảnh báo khi quá thấp <3 dB — over-compressed)
     if crest < 3.0:
-        score -= 6
         warnings.append("Low crest factor")
+    crest_pen = min(6.0, max(0.0, abs(crest - 12.0) * 0.5))  # 2 dB lệch ≈ 1đ
+    score -= int(round(crest_pen))
+
+    # 5) Clipping digital 0 dBFS – phạt mạnh
     if clipping_count > 0:
-        score -= 15
-        warnings.append("Detected clipping")
+        score -= 25
+        if "Detected clipping" not in warnings:
+            warnings.append("Detected clipping")
+
+    # Ràng buộc
     score = max(0, min(100, score))
 
     return {

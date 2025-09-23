@@ -1,9 +1,15 @@
-from typing import List, Literal, Optional, Union, Annotated
+# backend/api/routes.py
+from typing import List, Literal, Optional, Union, Annotated, Dict, Any
+from pathlib import Path
+import io
+import uuid
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, StringConstraints
-from pathlib import Path
-import io, uuid
+from celery.result import AsyncResult
 from pydub import AudioSegment
+
+from backend.tasks import generate_task  # Celery task
 
 # ==== Types khớp FE ====
 
@@ -80,6 +86,7 @@ class PresetInfo(BaseModel):
     title: str
     lufsTarget: float
     description: Optional[str] = None
+
 # ==== Router & Services ====
 api_router = APIRouter(tags=["tts"])
 
@@ -91,16 +98,34 @@ from ..modules.audio_pipeline import run_pipeline
 from ..modules.quality_control import MetricsDict
 from backend.modules.presets import PRESETS
 
+# Map trạng thái Celery -> JobState (Literal)
+def _map_state(celery_state: str) -> JobState:
+    cs = (celery_state or "").upper()
+    if cs in ("PENDING", "RECEIVED", "REVOKED"):
+        return "queued"
+    if cs in ("STARTED", "PROGRESS", "RETRY"):
+        return "processing"
+    if cs in ("SUCCESS",):
+        return "done"
+    if cs in ("FAILURE",):
+        return "error"
+    return "processing"
 
 @api_router.post("/generate", response_model=GenerateResponse)
 async def generate(req: GenerateRequest) -> GenerateResponse:
-    """Phase 1: sync với Piper, trả file đã xử lý + metrics."""
-    if req.mode != "sync":
-        raise HTTPException(status_code=400, detail="Only sync mode supported in Phase 1.")
+    """
+    Sync (giữ nguyên Phase 1) + nhánh async (enqueue Celery).
+    """
+    # Nhánh ASYNC cho Phase 3
+    if req.mode == "async":
+        async_result = generate_task.delay(req.model_dump())
+        return AsyncGenerateResponse(kind="async", jobId=async_result.id)
+
+    # === Nhánh SYNC hiện có (Phase 1) ===
     if req.engine != "piper":
         raise HTTPException(status_code=400, detail="Only engine 'piper' supported in Phase 1.")
 
-    text: str = req.text  # đã strip/validate bởi schema
+    text: str = req.text
     speed = float(req.config.speed or 1.0)
 
     # 1) TTS -> WAV
@@ -110,22 +135,21 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
     # 2) Pipeline -> WAV processed + metrics
     processed_wav, metrics = run_pipeline(
         raw_wav,
-        preset_key=req.config.presetKey,   # ← nhận từ FE
-    )  
+        preset_key=req.config.presetKey,
+    )
     m: MetricsDict = metrics
 
     # 3) Export
     fmt: ExportFormat = req.export.format if req.export else "wav"
     bitrate = f"{req.export.bitrateKbps}k" if req.export and req.export.bitrateKbps else None
 
-    # nhờ stub typings/pydub, Pylance hiểu đúng kiểu AudioSegment
     audio: AudioSegment = AudioSegment.from_file(io.BytesIO(processed_wav), format="wav")
     job_id = uuid.uuid4().hex
     out_path = OUTPUT_DIR / f"{job_id}.{fmt}"
     if fmt == "wav":
-        audio.export(str(out_path), format="wav")                # ✅ Path → str
+        audio.export(str(out_path), format="wav")
     elif fmt in ("mp3", "flac", "m4a"):
-        audio.export(str(out_path), format=fmt, bitrate=bitrate) # ✅ Path → str
+        audio.export(str(out_path), format=fmt, bitrate=bitrate)
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported format: {fmt}")
 
@@ -138,8 +162,53 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
 
 @api_router.get("/status/{job_id}", response_model=JobStatusResponse)
 async def get_status(job_id: str) -> JobStatusResponse:
-    raise HTTPException(status_code=501, detail=f"Not implemented: /status/{job_id}")
+    res = AsyncResult(job_id)
+    mapped: JobState = _map_state(res.state)
+    meta: Dict[str, Any] = res.info if isinstance(res.info, dict) else {}
+    prog = meta.get("progress")
+    progress: Optional[int] = int(prog) if isinstance(prog, (int, float)) else None
 
+    if mapped == "error":
+        detail = str(meta) if meta else "Unknown error"
+        return JobStatusResponse(
+            jobId=job_id,
+            state=mapped,
+            progress=progress,
+            error=ErrorInfo(code="WORKER_ERROR", message=detail)
+        )
+
+    return JobStatusResponse(
+        jobId=job_id,
+        state=mapped,
+        progress=progress
+    )
+
+@api_router.get("/result/{job_id}", response_model=SyncGenerateResponse)
+async def get_result(job_id: str) -> SyncGenerateResponse:
+    res = AsyncResult(job_id)
+    if res.state != "SUCCESS":
+        raise HTTPException(status_code=404, detail="Result not ready")
+
+    data: Dict[str, Any] = res.result or {}
+
+    # Bảo đảm audio_url là str (để Pylance hài lòng và tránh lỗi runtime)
+    audio_url_val = data.get("audio_url")
+    if not isinstance(audio_url_val, str):
+        raise HTTPException(status_code=500, detail="Malformed worker result: 'audio_url' must be str")
+
+    fmt_raw = data.get("format")
+    fmt: ExportFormat = fmt_raw if fmt_raw in ("mp3", "wav", "flac", "m4a") else "wav"
+
+    metrics_raw = data.get("metrics") or {}
+    if not isinstance(metrics_raw, dict):
+        raise HTTPException(status_code=500, detail="Malformed worker result: 'metrics' must be object")
+
+    return SyncGenerateResponse(
+        kind="sync",
+        audioUrl=audio_url_val,
+        format=fmt,
+        metrics=QualityMetrics(**metrics_raw)
+    )
 
 @api_router.get("/presets", response_model=List[PresetInfo])
 def list_presets():
@@ -147,5 +216,5 @@ def list_presets():
         "key": p["key"],
         "title": p["title"],
         "lufsTarget": p["dsp"]["lufs_target"],
-        "description": p.get("description","")
+        "description": p.get("description", "")
     } for p in PRESETS.values()]

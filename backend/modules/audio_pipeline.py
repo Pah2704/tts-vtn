@@ -19,6 +19,18 @@ from .quality_control import measure_metrics, MetricsDict
 from .presets import PRESETS, PresetKey, CompParams
 
 
+# Optional deps (bypass if missing)
+try:  # NR
+    import noisereduce as nr  # type: ignore
+except Exception:  # pragma: no cover
+    nr = None  # type: ignore
+
+try:  # EQ/filters
+    from scipy.signal import butter, sosfilt, iirpeak  # type: ignore
+except Exception:  # pragma: no cover
+    butter = sosfilt = iirpeak = None  # type: ignore
+
+
 # =========================
 # I/O helpers
 # =========================
@@ -111,22 +123,198 @@ def _preset_to_params(key: Optional[PresetKey]) -> DspParams:
 # Placeholders (bypass an toàn)
 # =========================
 def noise_reduce(x: np.ndarray, sr: int, strength: Literal["light", "medium", "strong"]) -> np.ndarray:
-    """TODO: spectral gating (noisereduce/scipy). Hiện tại bypass."""
-    return x
+    """Spectral gating đơn giản (noisereduce). Nếu thiếu lib → bypass."""
+    if x.size == 0 or nr is None:
+        return x
+    # Map mức độ → prop_decrease + time constant
+    if strength == "strong":
+        prop, tc = 1.0, 0.6
+    elif strength == "medium":
+        prop, tc = 0.85, 0.5
+    else:
+        prop, tc = 0.7, 0.4
+    try:
+        y = nr.reduce_noise(
+            y=x.astype(np.float32, copy=False),
+            sr=sr,
+            stationary=True,
+            prop_decrease=prop,
+            time_constant_s=tc,
+            freq_mask_smooth_hz=500,
+            n_std_thresh_stationary=1.5,
+        )
+        return np.clip(y, -1.0, 1.0)
+    except Exception:
+        return x
 
 
-def eq_apply(x: np.ndarray, sr: int, profile: Literal["flat", "voice_clarity", "warmth", "brightness"]) -> np.ndarray:
-    """TODO: 3–5 band (biquad). 'flat' => bypass."""
-    return x
+def eq_apply(
+    x: np.ndarray,
+    sr: int,
+    profile: Literal["flat", "voice_clarity", "warmth", "brightness"],
+) -> np.ndarray:
+    """
+    EQ tối thiểu bằng IIR:
+    - voice_clarity: high-pass 80 Hz + peaking +3 dB @ 3 kHz (Q≈1.0)
+    - warmth: high-pass 60 Hz + peaking +2 dB @ 200 Hz, -2 dB @ 4 kHz
+    - brightness: high-pass 80 Hz + peaking +3 dB @ 8 kHz
+    Nếu thiếu SciPy → bypass.
+    """
+    if x.size == 0 or butter is None or sosfilt is None:
+        return x
+
+    # Narrow type cho Pylance (butter/sosfilt không còn Optional)
+    assert butter is not None and sosfilt is not None
+
+    y = x.astype(np.float32, copy=True)
+
+    def hp(y_in: np.ndarray, fc: float) -> np.ndarray:
+        # 2nd-order Butter HPF
+        sos = butter(2, fc, btype="highpass", fs=sr, output="sos")  # type: ignore[call-arg]
+        return np.asarray(sosfilt(sos, y_in), dtype=np.float32)      # type: ignore[arg-type]
+
+    def peak(y_in: np.ndarray, f0: float, gain_db: float, q: float) -> np.ndarray:
+        # Simple peaking: band-pass then mix (poor-man's peq). Nếu thiếu iirpeak → bypass.
+        if iirpeak is None or gain_db == 0.0:
+            return y_in
+        from scipy.signal import lfilter  # type: ignore
+        b, a = iirpeak(f0, Q=q, fs=sr)                      # type: ignore[call-arg]
+        b = np.asarray(b, dtype=np.float32)
+        a = np.asarray(a, dtype=np.float32)
+        band = np.asarray(lfilter(b, a, y_in), dtype=np.float32)  # type: ignore[arg-type]
+        g = float(10.0 ** (gain_db / 20.0))
+        return np.clip(y_in + (g - 1.0) * band, -1.0, 1.0)
+
+    try:
+        if profile == "flat":
+            return y
+        if profile == "voice_clarity":
+            y = hp(y, 80.0)
+            y = peak(y, 3000.0, +3.0, q=1.0)
+            return y
+        if profile == "warmth":
+            y = hp(y, 60.0)
+            y = peak(y, 200.0, +2.0, q=0.8)
+            y = peak(y, 4000.0, -2.0, q=1.2)
+            return y
+        if profile == "brightness":
+            y = hp(y, 80.0)
+            y = peak(y, 8000.0, +3.0, q=0.9)
+            return y
+        return y
+    except Exception:
+        # an toàn nếu SciPy có vấn đề runtime
+        return x
+
+    """
+    EQ tối thiểu bằng IIR:
+    - voice_clarity: high-pass 80 Hz + peaking +3 dB @ 3 kHz (Q≈1.0)
+    - warmth: high-pass 60 Hz nhẹ + peaking +2 dB @ 200 Hz, -2 dB @ 4 kHz
+    - brightness: high-pass 80 Hz + peaking +3 dB @ 8 kHz
+    Nếu thiếu SciPy → bypass.
+    """
+    if x.size == 0 or butter is None or sosfilt is None:
+        return x
+
+    y = x.astype(np.float32, copy=True)
+
+    def hp(y: np.ndarray, fc: float) -> np.ndarray:
+        # 2nd-order Butter HPF
+        sos = butter(2, fc, btype="highpass", fs=sr, output="sos")
+        return sosfilt(sos, y)
+
+    def peak(y: np.ndarray, f0: float, gain_db: float, q: float) -> np.ndarray:
+        if iirpeak is None or gain_db == 0.0:
+            return y
+        # iirpeak returns (b, a). Convert to SOS via butter as a wrapper is overkill;
+        # apply biquad manually by filtering twice is unnecessary—use lfilter via sos? Keep simple:
+        # Approx: apply a narrow bandpass and mix (poor-man peq). Enough for minimal EQ.
+        from scipy.signal import lfilter  # type: ignore
+        bw = f0 / q
+        b, a = iirpeak(f0, Q=q, fs=sr)
+        band = lfilter(b, a, y)
+        g = 10 ** (gain_db / 20.0)
+        return np.clip(y + (g - 1.0) * band, -1.0, 1.0)
+
+    try:
+        if profile == "flat":
+            return y
+        if profile == "voice_clarity":
+            y = hp(y, 80.0)
+            y = peak(y, 3000.0, +3.0, q=1.0)
+            return y
+        if profile == "warmth":
+            y = hp(y, 60.0)
+            y = peak(y, 200.0, +2.0, q=0.8)
+            y = peak(y, 4000.0, -2.0, q=1.2)
+            return y
+        if profile == "brightness":
+            y = hp(y, 80.0)
+            y = peak(y, 8000.0, +3.0, q=0.9)
+            return y
+        return y
+    except Exception:
+        return x
 
 
 def compress(x: np.ndarray, sr: int, comp: CompParams) -> np.ndarray:
-    """TODO: soft-knee compressor. ratio ~ 1.0 => bypass."""
+    """
+    Compressor feed-forward tối giản (soft-knee gần đúng).
+    - threshold (dBFS), ratio, attack/release (ms), makeup (dB).
+    - ratio≈1 → bypass.
+    """
     ratio = float(comp.get("ratio", 1.0) or 1.0)
-    if ratio <= 1.05:
+    if x.size == 0 or ratio <= 1.02:
         return x
-    # Placeholder: chưa nén thật, giữ nguyên
-    return x
+
+    thr = float(comp.get("threshold", -24.0))
+    att = max(1.0, float(comp.get("attack", 15.0)))   # ms
+    rel = max(10.0, float(comp.get("release", 150.0))) # ms
+    mk  = float(comp.get("makeup", 0.0))
+
+    # Envelope RMS (window ~ 10ms) → level dBFS
+    win = max(1, int(sr * 0.010))
+    # pad for simple moving RMS
+    pad = np.pad(x, (win // 2, win - win // 2), mode="edge")
+    # moving RMS
+    sq = pad * pad
+    cumsum = np.cumsum(sq, dtype=np.float64)
+    rms = np.sqrt((cumsum[win:] - cumsum[:-win]) / win, dtype=np.float64)
+    # align length
+    rms = rms[: x.size]
+    rms = np.maximum(rms, 1e-12)
+    lvl_db = 20.0 * np.log10(rms)
+
+    # Gain computer w/ soft knee (6 dB)
+    knee = 6.0
+    over = lvl_db - thr
+    # region masks
+    below = over <= -knee / 2
+    knee_zone = (over > -knee / 2) & (over < knee / 2)
+    above = over >= knee / 2
+    gain_red_db = np.zeros_like(lvl_db)
+    # knee formula (approx)
+    gain_red_db[knee_zone] = (1.0 - 1.0 / ratio) * ((over[knee_zone] + knee / 2) ** 2) / (2 * knee)
+    gain_red_db[above] = (1.0 - 1.0 / ratio) * (over[above])
+
+    # Attack/Release smoothing on gain reduction
+    att_a = np.exp(-1.0 / max(1, int(sr * att / 1000.0)))
+    rel_a = np.exp(-1.0 / max(1, int(sr * rel / 1000.0)))
+    gr_s = np.zeros_like(gain_red_db)
+    g = 0.0
+    for i, gr in enumerate(gain_red_db):
+        target = gr
+        if gr > g:  # more reduction → attack
+            g = att_a * g + (1 - att_a) * target
+        else:       # less reduction → release
+            g = rel_a * g + (1 - rel_a) * target
+        gr_s[i] = g
+
+    # Convert gain reduction dB → linear, apply + makeup
+    gain_db = -gr_s + mk
+    gain = 10.0 ** (gain_db / 20.0)
+    y = x * gain.astype(np.float32, copy=False)
+    return np.clip(y, -1.0, 1.0)
 
 
 def assemble_with_crossfade(chunks: List[np.ndarray], sr: int, ms: int = 8) -> np.ndarray:

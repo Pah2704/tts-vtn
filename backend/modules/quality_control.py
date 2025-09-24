@@ -28,7 +28,15 @@ def _read_wav_bytes(wav_bytes: bytes) -> Tuple[np.ndarray, int]:
 
 def _integrated_lufs(x: np.ndarray, sr: int) -> float:
     meter = pyln.Meter(sr)  # ITU-R BS.1770
-    return float(meter.integrated_loudness(x))
+    try:
+        v = float(meter.integrated_loudness(x))
+    except Exception:
+        # im lặng / quá ngắn / lỗi nội bộ -> trả về mức rất nhỏ nhưng HỮU HẠN
+        return -120.0
+    # đảm bảo giá trị finite để không phá JSON encoder
+    if not np.isfinite(v):
+        return -120.0
+    return v
 
 def _true_peak_dbfs(x: np.ndarray) -> float:
     peak = float(np.max(np.abs(x))) if x.size else 0.0
@@ -183,16 +191,20 @@ def measure_metrics(wav_bytes: bytes) -> MetricsDict:
     # Ràng buộc
     score = max(0, min(100, score))
 
+    # Bảo đảm tất cả số trả về là finite (an toàn cho JSON)
+    def _finite(v: float, fb: float) -> float:
+        return float(v) if np.isfinite(v) else float(fb)
+
     return {
-        "lufsIntegrated": float(lufs),
-        "truePeakDb": float(peak_db),
-        "durationSec": float(duration),
+        "lufsIntegrated": _finite(lufs, -120.0),
+        "truePeakDb":     _finite(peak_db, -120.0),
+        "durationSec":    _finite(duration, 0.0),
         # mở rộng (optional)
-        "rms": float(rms_db),
-        "crestFactor": float(crest),
-        "snrApprox": float(snr_approx),
-        "clippingCount": int(clipping_count),
-        "silenceGapsMs": [int(ms) for ms in silence_gaps],
-        "qualityScore": int(score),
-        "warnings": warnings,
+        "rms":            _finite(rms_db, -120.0),
+        "crestFactor":    _finite(crest, 0.0),
+        "snrApprox":      _finite(snr_approx, 0.0),
+        "clippingCount":  int(clipping_count),
+        "silenceGapsMs":  [int(ms) for ms in silence_gaps],
+        "qualityScore":   int(score),
+        "warnings":       warnings,
     }

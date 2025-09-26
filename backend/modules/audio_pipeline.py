@@ -341,45 +341,55 @@ def assemble_with_crossfade(chunks: List[np.ndarray], sr: int, ms: int = 8) -> n
     return np.clip(out, -1.0, 1.0)
 
 
-# =========================
-# Public API
-# =========================
-def run_pipeline(
-    wav_bytes: bytes,
-    *,
+def process(
+    pcm: np.ndarray,
+    sr: int,
     preset_key: Optional[PresetKey] = None,
-    utter_wavs: Optional[List[bytes]] = None,  # dùng cho hội thoại (nếu có)
-) -> Tuple[bytes, MetricsDict]:
-    """
-    Phase 2: Pipeline xử lý theo preset.
-    - Nếu không có preset -> fallback Phase 1 (-16 LUFS, -1 dBTP).
-    - NR/EQ/Comp hiện là placeholder (bypass), sẽ hiện thực thật ở bước sau.
-    """
+    overrides: Optional[Dict] = None,
+    utter_pcms: Optional[List[np.ndarray]] = None,
+) -> Tuple[np.ndarray, MetricsDict]:
+    """Pipeline trực tiếp trên PCM (giữ hook overrides để tương thích về sau)."""
     t0 = time.perf_counter()
-    x, sr = _read_wav_bytes(wav_bytes)
+    x = np.asarray(pcm, dtype=np.float32)
+    if x.ndim > 1:
+        x = x.reshape(-1)
+
     p = _preset_to_params(preset_key)
 
-    # 1) NR
+    # Overrides hiện chưa được áp dụng – giữ chỗ để tránh lỗi do caller truyền vào
+    _ = overrides
+
+    # 1) Noise reduction
     t1 = time.perf_counter()
     x = noise_reduce(x, sr, p.nr_strength)
+
     # 2) EQ
     t2 = time.perf_counter()
     x = eq_apply(x, sr, p.eq_profile)
-    # 3) Comp
+
+    # 3) Compression
     t3 = time.perf_counter()
     x = compress(x, sr, p.comp)
 
-    # 4) Normalize -> 5) Limit
+    # 4) Normalize + limiter
     t4 = time.perf_counter()
     x = normalize_to_lufs_array(x, sr, target_lufs=p.lufs_target)
-    x = true_peak_limit_array(x, ceiling_db=p.peak_ceiling) 
-    # 6) (Optional) Voice-level matching + assemble
-    if utter_wavs and p.level_match_enabled:
-        parts = []
-        for uw in utter_wavs:
-            u, _ = _read_wav_bytes(uw)
-            u = normalize_to_lufs_array(u, sr, target_lufs=p.per_utt_target or p.lufs_target)
-            parts.append(u)
+    x = true_peak_limit_array(x, ceiling_db=p.peak_ceiling)
+
+    # 5) Optional per-utterance level matching
+    if utter_pcms and p.level_match_enabled:
+        parts: List[np.ndarray] = []
+        for utt in utter_pcms:
+            u = np.asarray(utt, dtype=np.float32)
+            if u.ndim > 1:
+                u = u.reshape(-1)
+            parts.append(
+                normalize_to_lufs_array(
+                    u,
+                    sr,
+                    target_lufs=p.per_utt_target or p.lufs_target,
+                )
+            )
         x = assemble_with_crossfade(parts, sr, ms=8)
         x = normalize_to_lufs_array(x, sr, target_lufs=p.lufs_target)
         x = true_peak_limit_array(x, ceiling_db=p.peak_ceiling)
@@ -390,8 +400,7 @@ def run_pipeline(
 
     t6 = time.perf_counter()
     logger.info(
-        "pipeline(ms): read=%.1f NR=%.1f EQ=%.1f Comp=%.1f Norm/Limit=%.1f Write/QC=%.1f total=%.1f",
-        (t1 - t0) * 1e3,
+        "pipeline(ms): NR=%.1f EQ=%.1f Comp=%.1f Norm/Limit=%.1f QC=%.1f total=%.1f",
         (t2 - t1) * 1e3,
         (t3 - t2) * 1e3,
         (t4 - t3) * 1e3,
@@ -399,6 +408,33 @@ def run_pipeline(
         (t6 - t5) * 1e3,
         (t6 - t0) * 1e3,
     )
+
+    return x, metrics
+
+
+def run_pipeline(
+    wav_bytes: bytes,
+    *,
+    preset_key: Optional[PresetKey] = None,
+    utter_wavs: Optional[List[bytes]] = None,
+) -> Tuple[bytes, MetricsDict]:
+    """Compat wrapper nhận WAV bytes (Phase 1 API)."""
+    pcm, sr = _read_wav_bytes(wav_bytes)
+
+    utter_pcms: Optional[List[np.ndarray]] = None
+    if utter_wavs:
+        utter_pcms = []
+        for uw in utter_wavs:
+            u, sr_u = _read_wav_bytes(uw)
+            if sr_u != sr and sr > 0 and sr_u > 0 and u.size:
+                ratio = sr / sr_u
+                idx = (np.arange(int(len(u) * ratio)) / ratio).astype(np.int64)
+                idx = np.clip(idx, 0, len(u) - 1)
+                u = u[idx]
+            utter_pcms.append(u)
+
+    processed_pcm, metrics = process(pcm, sr, preset_key=preset_key, utter_pcms=utter_pcms)
+    out_bytes = _write_wav_bytes(processed_pcm.astype(np.float32, copy=False), sr)
     return out_bytes, metrics
 
 # ===== Backward-compat wrappers (Phase 1 tests expect these) =====

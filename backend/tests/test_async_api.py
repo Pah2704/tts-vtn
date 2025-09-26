@@ -19,13 +19,13 @@ def test_generate_async_returns_jobid(monkeypatch):
 
     r = client.post("/api/generate", json={
         "mode": "async",
-        "engine": "piper",
+        "engine": "xtts",
         "text": "hello",
         "config": {"voiceId": "vi_female_01"}
     })
     assert r.status_code == 200
     d = r.json()
-    assert d["kind"] == "async" and d["jobId"] == "job-abc"
+    assert d["mode"] == "async" and d["jobId"] == "job-abc"
 
 def test_status_and_result_shapes(monkeypatch):
     import backend.api.routes as routes
@@ -50,5 +50,5 @@ def test_status_and_result_shapes(monkeypatch):
     r = client.get("/api/result/job-abc")
     assert r.status_code == 200
     d = r.json()
-    assert d["audioUrl"].endswith(".wav")
+    assert d["url"].endswith(".wav")
     assert "metrics" in d and "lufsIntegrated" in d["metrics"]

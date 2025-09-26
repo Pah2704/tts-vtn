@@ -12,12 +12,14 @@ TTS Manager — Piper (CLI) + XTTS (stub) adapter.
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Tuple
+import logging
 import os
 import shutil
 import subprocess
 import tempfile
 import io
+from threading import Lock
 
 from ..core.config import settings
 
@@ -29,9 +31,31 @@ except Exception:
 
 from pydub import AudioSegment
 
+logger = logging.getLogger(__name__)
+
 # ==== Hằng số / types cho XTTS ====
 MAX_XTTS_CHARS = 2000
 EmotionTag = Literal["happy", "sad", "excited", "calm", "serious", "whisper"]
+
+
+class PiperConfigError(RuntimeError):
+    """Raised when Piper binary or assets are not ready."""
+    pass
+
+
+_piper_health_lock = Lock()
+_piper_health_state: Tuple[bool, Optional[str]] = (False, "Piper runtime not initialized")
+
+
+def set_piper_health(is_ready: bool, error: Optional[str]) -> None:
+    global _piper_health_state
+    with _piper_health_lock:
+        _piper_health_state = (is_ready, error)
+
+
+def get_piper_health() -> Tuple[bool, Optional[str]]:
+    with _piper_health_lock:
+        return _piper_health_state
 
 
 def pick_device() -> str:
@@ -84,19 +108,52 @@ class TTSManager:
 
         # Chỉ validate Piper khi engine == "piper"
         self.piper_bin = piper_bin or settings.PIPER_BIN
-        self.model_path = model_path or settings.PIPER_MODEL_PATH
-        self.config_path = config_path or settings.PIPER_CONFIG_PATH
+        raw_model_path = model_path or settings.PIPER_MODEL_PATH
+        raw_config_path = config_path or settings.PIPER_CONFIG_PATH
+        self.model_path = os.path.expanduser(raw_model_path) if raw_model_path else ""
+        self.config_path = os.path.expanduser(raw_config_path) if raw_config_path else None
 
         if self.engine == "piper":
             if shutil.which(self.piper_bin) is None:
-                raise RuntimeError(
+                logger.warning("Piper binary not found at '%s'", self.piper_bin)
+                set_piper_health(False, "Piper binary not found")
+                raise PiperConfigError(
                     "Piper binary not found. Ensure PIPER_BIN in PATH or set env PIPER_BIN."
                 )
-            if not self.model_path or not os.path.exists(self.model_path):
-                raise RuntimeError("Missing PIPER_MODEL_PATH or file not found.")
+            if not self.model_path:
+                logger.warning("Piper model path not configured")
+                set_piper_health(False, "PIPER_MODEL_PATH not configured")
+                raise PiperConfigError("PIPER_MODEL_PATH not configured.")
+            if not os.path.exists(self.model_path):
+                logger.warning("Piper model path missing at '%s'", self.model_path)
+                set_piper_health(False, "PIPER_MODEL_PATH missing")
+                raise PiperConfigError("Missing PIPER_MODEL_PATH or file not found.")
             # config có thể thiếu với 1 số model, nhưng khuyến nghị có:
             if self.config_path and (not os.path.exists(self.config_path)):
-                raise RuntimeError("PIPER_CONFIG_PATH set but file not found.")
+                logger.warning("Piper config path missing at '%s'", self.config_path)
+                set_piper_health(False, "PIPER_CONFIG_PATH missing")
+                raise PiperConfigError("PIPER_CONFIG_PATH set but file not found.")
+            set_piper_health(True, None)
+
+    def validate_runtime(self) -> None:
+        if self.engine != "piper":
+            return
+        try:
+            proc = subprocess.run(
+                [self.piper_bin, "--help"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=settings.PIPER_TIMEOUT_SEC,
+            )
+        except OSError as exc:  # binary missing or not executable
+            set_piper_health(False, str(exc))
+            raise PiperConfigError(f"Failed to execute Piper binary: {exc}") from exc
+        if proc.returncode != 0:
+            err = proc.stderr.decode("utf-8", "ignore").strip()
+            set_piper_health(False, f"Exit {proc.returncode}: {err}")
+            raise PiperConfigError(f"Piper binary failed self-check (code {proc.returncode}). {err}")
+        set_piper_health(True, None)
 
     # ==== Public API ====
     def synthesize(self, text: str, cfg: SynthesisConfig) -> bytes:

@@ -86,18 +86,23 @@ export interface GenerateRequest {
 
 /** Kết quả đồng bộ (Phase 1). */
 export interface SyncGenerateResponse {
-  readonly kind: "sync";
-  /** URL có thể phát/tải (có thể là path tương đối). */
-  readonly audioUrl: string;
-  /** BE echo lại định dạng. */
+  readonly mode: "sync";
+  readonly engine: Engine;
+  /** URL tuyệt đối (BE đã trả sẵn). */
+  readonly url: string;
+  /** Tên file (không path). */
+  readonly filename: string;
+  /** Định dạng export. */
   readonly format: ExportFormat;
   /** Metrics tối thiểu phải có (LUFS/Peak/Duration). */
   readonly metrics: QualityMetrics;
+  readonly duration?: number;
 }
 
 /** Kết quả bất đồng bộ (Phase 3+). */
 export interface AsyncGenerateResponse {
-  readonly kind: "async";
+  readonly mode: "async";
+  readonly engine: Engine;
   readonly jobId: string;
 }
 

@@ -24,8 +24,10 @@ const baseRequest: GenerateRequest = {
 };
 
 const syncResponse: SyncGenerateResponse = {
-  kind: "sync",
-  audioUrl: "/audio/out.mp3",
+  mode: "sync",
+  engine: "piper",
+  url: "http://localhost:8000/outputs/out.mp3",
+  filename: "out.mp3",
   format: "mp3",
   metrics: { lufsIntegrated: -16, truePeakDb: -1, durationSec: 1 },
 };
@@ -60,7 +62,7 @@ describe("useTTSJob", () => {
   });
 
   it("polls async job until done and uses embedded result", async () => {
-    vi.mocked(generate).mockResolvedValue({ kind: "async", jobId: "job-1" });
+    vi.mocked(generate).mockResolvedValue({ mode: "async", engine: "xtts", jobId: "job-1" });
 
     const statuses: JobStatusResponse[] = [
       { jobId: "job-1", state: "queued", progress: 0 },
@@ -113,7 +115,7 @@ describe("useTTSJob", () => {
   });
 
   it("fetches result when status is done without payload", async () => {
-    vi.mocked(generate).mockResolvedValue({ kind: "async", jobId: "job-2" });
+    vi.mocked(generate).mockResolvedValue({ mode: "async", engine: "xtts", jobId: "job-2" });
 
     const statuses: JobStatusResponse[] = [
       { jobId: "job-2", state: "processing", progress: 20 },
@@ -148,7 +150,7 @@ describe("useTTSJob", () => {
   });
 
   it("surfaces worker errors from status", async () => {
-    vi.mocked(generate).mockResolvedValue({ kind: "async", jobId: "job-3" });
+    vi.mocked(generate).mockResolvedValue({ mode: "async", engine: "xtts", jobId: "job-3" });
     vi.mocked(getStatus).mockResolvedValue({
       jobId: "job-3",
       state: "error",
@@ -173,7 +175,7 @@ describe("useTTSJob", () => {
   });
 
   it("stops polling when status request throws", async () => {
-    vi.mocked(generate).mockResolvedValue({ kind: "async", jobId: "job-4" });
+    vi.mocked(generate).mockResolvedValue({ mode: "async", engine: "xtts", jobId: "job-4" });
     vi.mocked(getStatus).mockRejectedValue(new Error("network down"));
 
     const { result } = renderHook(() => useTTSJob());

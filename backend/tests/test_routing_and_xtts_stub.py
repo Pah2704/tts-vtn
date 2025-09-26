@@ -30,7 +30,7 @@ def test_router_forces_mode_xtts_async():
     r = client.post("/api/generate", json=req)
     assert r.status_code == 200, r.text
     j = r.json()
-    assert j["kind"] == "async"
+    assert j["mode"] == "async"
     assert "jobId" in j
 
 def test_router_forces_mode_piper_sync(monkeypatch):
@@ -63,9 +63,9 @@ def test_router_forces_mode_piper_sync(monkeypatch):
     r = client.post("/api/generate", json=req)
     assert r.status_code == 200, r.text
     j = r.json()
-    assert j["kind"] == "sync"
+    assert j["mode"] == "sync"
     assert j["format"] == "mp3"
-    assert "audioUrl" in j and "metrics" in j
+    assert "url" in j and "metrics" in j
 
 def test_xtts_stub_synthesize_is_quiet_and_long_enough():
     tm = TTSManager(engine="xtts")

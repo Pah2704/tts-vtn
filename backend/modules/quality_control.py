@@ -23,7 +23,7 @@ def _read_wav_bytes(wav_bytes: bytes) -> Tuple[np.ndarray, int]:
     data, sr = sf.read(bio, dtype="float32", always_2d=True)  # (samples, channels)
     if data.ndim == 2 and data.shape[1] > 1:
         data = data.mean(axis=1, keepdims=True)
-    x = data.reshape(-1)  # mono
+    x = data.reshape(-1)  # mono  
     return x, sr
 
 def _integrated_lufs(x: np.ndarray, sr: int) -> float:

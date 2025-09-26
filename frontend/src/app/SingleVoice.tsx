@@ -51,8 +51,8 @@ const SingleVoice: React.FC = () => {
     setLoading(true);
     try {
       const res = await generate(request);
-      if (res.kind === "sync") {
-        setAudioUrl(toBackendUrl(res.audioUrl));
+      if (res.mode === "sync") {
+        setAudioUrl(toBackendUrl(res.url));
         setMetrics(res.metrics);
       }
     } catch (e: any) {

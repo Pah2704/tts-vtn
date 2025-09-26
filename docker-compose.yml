@@ -1,0 +1,70 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server","--save","","--appendonly","no"]
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      target: api
+    environment:
+      - APP_ENV=${APP_ENV:-local}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      - PIPER_BIN=/usr/local/bin/piper
+      - PIPER_MODEL_PATH=/app/models/en_GB-alan-medium.onnx
+      - PIPER_CONFIG_PATH=/app/models/en_GB-alan-medium.onnx.json
+      - OUTPUTS_DIR=/app/backend/outputs
+    # Nếu backend đọc các biến này, giữ lại;
+    # FE đã build sẵn vào /frontend/dist nên không cần VITE_* lúc runtime
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models:ro
+      - ./backend/outputs:/app/backend/outputs
+      - ./backend/presets_user:/app/backend/presets_user
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/readyz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  worker:
+    build:
+      context: .
+      target: worker
+    command: >
+      celery -A backend.celery_app.celery worker -l info --pool=solo
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      APP_ENV: ${APP_ENV:-local}
+      MODELS_DIR: /app/models
+      OUTPUTS_DIR: /app/backend/outputs
+      PIPER_BIN: /usr/local/bin/piper
+      PIPER_MODEL_PATH: /app/models/en_GB-alan-medium.onnx
+      PIPER_CONFIG_PATH: /app/models/en_GB-alan-medium.onnx.json
+    depends_on:
+      - redis
+    volumes:
+      - ./models:/app/models:ro
+      - ./backend/outputs:/app/backend/outputs
+      - ./backend/presets_user:/app/backend/presets_user
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A backend.celery_app.celery inspect ping -d worker@$$HOSTNAME | grep -q pong || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

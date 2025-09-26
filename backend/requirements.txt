@@ -5,8 +5,8 @@ pyloudnorm
 librosa
 numpy
 soundfile
-celery
-redis
+celery==5.3.*
+redis>=4.5
 python-multipart
 pydantic-settings
 piper

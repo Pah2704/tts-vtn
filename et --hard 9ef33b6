@@ -1,0 +1,19 @@
+[33m9ef33b6[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mtest/hardening-suite[m[33m, [m[1;31morigin/test/hardening-suite[m[33m)[m qc: ensure metrics are JSON-safe (finite LUFS/RMS/etc.)
+[33ma32e108[m test: routing (force mode), XTTS stub, presets shape + FE hook polling
+[33m599ebd1[m[33m ([m[1;32mfeat/phase-3[m[33m)[m feat(fe): add getResult() for async job result (JSON)
+[33mf06f76f[m test(audio): use noise background for ducking; avoid silence=0 RMS edge case
+[33m0c2230b[m fix(tts): replace from_raw fallback with stdlib wave-based silence to satisfy Pylance
+[33m6d3fbdb[m fix(worker): validate and cast emotions to EngineCfg; finalize async artifacts pipeline
+[33m7331446[m feat(worker): report progress via Celery update_state; add status mapping/progress tests
+[33m9889df4[m fix(api): clean routes (single endpoints, correct typing), add async branch and result/status handling
+[33m9ad2b26[m chore: prepare branch for Phase 3 and verify green test baseline
+[33m8afdcca[m[33m ([m[1;33mtag: [m[1;33mphase2-complete-2[m[33m, [m[1;31morigin/feat/phase-3[m[33m, [m[1;32mfeat/phase-2-audio-qc[m[33m, [m[1;32mbackup/feat-phase-3-before-revert[m[33m)[m Phase 2: DSP + QC scoring + FE polish + timing logs + tests
+[33md0850f5[m[33m ([m[1;33mtag: [m[1;33mphase2-complete[m[33m)[m Phase 2 complete: DSP (NR/EQ/Comp), QC scoring, FE metrics polish, timing logs
+[33m9411f5b[m Phase 2: minimal NR/EQ/Comp + type-safe EQ
+[33mf67f969[m Phase 2: extend QC metrics (RMS/Crest/SNR/Clipping/Silences/Score)
+[33m95aebf9[m[33m ([m[1;31morigin/main[m[33m, [m[1;32mmain[m[33m)[m docs: add detailed Phase 1 implementation guide (DOCS-Phase1.md)
+[33m3e81f29[m ci: fix pnpm on runners via Corepack; add pnpm store cache; relax ruff to E/F only
+[33mb1a3625[m ci: use corepack to install pnpm; freeze lockfile; fix preview build
+[33ma15d5bf[m ci: add GitHub Actions (backend pytest+ruff; frontend typecheck+vitest) and preview build
+[33mc1aff73[m chore: bootstrap monorepo (frontend+backend) and minimal FastAPI app
+[33mf5168ef[m first commit

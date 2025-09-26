@@ -26,6 +26,6 @@ def test_result_ignores_raw_url_field(monkeypatch):
     r = client.get("/api/result/xyz")
     assert r.status_code == 200
     d = r.json()
-    assert d["audioUrl"].endswith(".wav")
+    assert d["url"].endswith(".wav")
     assert d["format"] == "wav"
     assert "metrics" in d and "lufsIntegrated" in d["metrics"]

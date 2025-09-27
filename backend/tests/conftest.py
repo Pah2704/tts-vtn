@@ -1,7 +1,53 @@
-import numpy as np
-import os
-import pytest
+import io
+import wave
 from importlib import reload
+
+import numpy as np
+import pytest
+
+
+# --- Giữ 1 outputs dir cho cả session ---
+@pytest.fixture(scope="session")
+def _outputs_dir_session(tmp_path_factory):
+    return tmp_path_factory.mktemp("outputs")
+
+
+# --- Mỗi test patch env để dùng chung path trên ---
+@pytest.fixture(autouse=True)
+def _patch_outputs_env(monkeypatch, _outputs_dir_session):
+    monkeypatch.setenv("OUTPUTS_DIR", str(_outputs_dir_session))
+    try:
+        import backend.routes.history as routes_history
+
+        reload(routes_history)
+    except Exception:
+        pass
+
+
+try:
+    from backend.tests.helpers.audio import gen_sine_wav_bytes as _gen_sine
+
+    def gen_sine_wav_bytes(freq_hz: int = 440, dur_sec: float = 0.5, sr: int = 24_000) -> bytes:
+        return _gen_sine(freq_hz=freq_hz, dur_sec=dur_sec, sr=sr)
+
+except Exception:  # pragma: no cover - helper package may be absent in older branches
+    pass
+
+
+@pytest.fixture
+def sine_wav():
+    sr = 16_000
+    dur = 1.0
+    t = np.linspace(0, dur, int(sr * dur), endpoint=False, dtype=np.float32)
+    waveform = (0.1 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes((waveform * 32767).astype(np.int16).tobytes())
+    return buf.getvalue()
 
 
 @pytest.fixture(autouse=True)

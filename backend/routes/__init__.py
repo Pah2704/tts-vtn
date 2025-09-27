@@ -5,4 +5,5 @@ __all__ = [
     "voices",
     "history",
     "presets_user",
+    "presets",
 ]

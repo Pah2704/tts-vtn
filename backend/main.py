@@ -13,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from backend.routes import health, voices, history, presets_user
 from backend.routes import generate as generate_route
+from backend.routes.presets import router as presets_router
 from .modules.tts_manager import (
     TTSManager,
     PiperConfigError,
@@ -85,6 +86,7 @@ def readyz() -> JSONResponse:
 # Routers
 app.include_router(health.router, prefix="")
 app.include_router(generate_route.router, prefix="")
+app.include_router(presets_router, prefix="")
 app.include_router(voices.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(presets_user.router, prefix="/api")

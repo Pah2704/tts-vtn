@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 from backend.main import app
 from backend.modules import tts_manager as tts_mod
-from backend.tests.conftest import gen_sine_wav_bytes
+from backend.tests.helpers.audio import gen_sine_wav_bytes
 
 client = TestClient(app)
 

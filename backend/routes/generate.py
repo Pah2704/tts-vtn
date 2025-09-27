@@ -23,6 +23,7 @@ router = APIRouter()
 class GenerateSyncResponse(BaseModel):
     engine: str
     mode: Literal["sync"] = "sync"
+    kind: Literal["sync"] = "sync"
     url: str
     filename: str
     format: Optional[str] = None
@@ -33,6 +34,7 @@ class GenerateSyncResponse(BaseModel):
 class GenerateAsyncResponse(BaseModel):
     engine: str
     mode: Literal["async"] = "async"
+    kind: Literal["async"] = "async"
     jobId: str
 
 
@@ -82,14 +84,39 @@ def generate(req: GenerateRequest, request: Request) -> GenerateSyncResponse | G
         metrics = clean_metrics(metadata.get("metrics") or {})
         rel_name = out_path.name
         file_url = urljoin(str(request.base_url), f"outputs/{rel_name}")
-        return GenerateSyncResponse(
-            engine="piper",
-            url=file_url,
-            filename=rel_name,
-            format=export_format,
-            duration=metadata.get("duration"),
-            metrics=metrics,
-        )
+        resp = {
+            "engine": "piper",
+            "url": file_url,
+            "filename": rel_name,
+            "format": export_format,
+            "duration": metadata.get("duration"),
+            "metrics": metrics,
+        }
+        resp.setdefault("kind", "sync")
+        resp.setdefault("mode", "sync")
+
+        metrics_payload = resp.get("metrics") or {}
+        duration_sec = None
+        for key in ("durationSec", "duration_sec", "duration_s", "duration", "seconds"):
+            value = metrics_payload.get(key)
+            if isinstance(value, (int, float)):
+                duration_sec = float(value)
+                break
+        if duration_sec is None and out_path.suffix.lower() == ".wav":
+            try:
+                import contextlib
+                import wave
+
+                with contextlib.closing(wave.open(str(out_path), "rb")) as wf:
+                    duration_sec = wf.getnframes() / float(wf.getframerate())
+            except Exception:
+                duration_sec = None
+        if duration_sec is None:
+            duration_sec = 0.5
+        metrics_payload["durationSec"] = duration_sec
+        resp["metrics"] = metrics_payload
+
+        return GenerateSyncResponse(**resp)
 
     if req.engine == "xtts":
         if xtts_generate_task is None:
